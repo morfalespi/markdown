@@ -1,1266 +1,323 @@
-# OpenAI Python API library
+# Provider-Neutral Python API Client — Architecture and Documentation Blueprint
 
-<!-- prettier-ignore -->
-[![PyPI version](https://img.shields.io/pypi/v/openai.svg?label=pypi%20(stable))](https://pypi.org/project/openai/)
+A reusable blueprint for designing a **robust, typed, synchronous/asynchronous Python client** without requiring a particular model, API vendor, cloud platform, or hosted product. It preserves the structure and technical depth of a production SDK README while separating portable design rules from provider adapters.
 
-The OpenAI Python library provides convenient access to the OpenAI REST API from any Python 3.10+
-application. The library includes type definitions for all request params and response fields,
-and offers both synchronous and asynchronous clients powered by [HTTPX2](https://httpx2.pydantic.dev/).
+**Status:** documentation and interface-design reference. These four supplied Markdown files do **not** contain an installable SDK or prove that any code shown here has been implemented. Examples using `your_sdk` and placeholder names are **illustrative contracts**, not executable imports until a real package is built.
 
-It is generated from our [OpenAPI specification](https://github.com/openai/openai-openapi).
+**Attribution:** The organization and several engineering concerns were inspired by the [OpenAI Python SDK](https://github.com/openai/openai-python) and its [documentation](https://github.com/openai/openai-python/blob/main/README.md). This is an independent adaptation, not an official OpenAI release or an assertion of feature parity. Preserve the original copyright and license conditions wherever code or other licensed material is reused. The historical changelogs supplied alongside this file belong to the upstream repository, not this project.
+
+The intended separation of concerns is: **configuration → authentication → transport → API operations → typed parsing**, with optional adapters for provider-specific conventions. Observability, security, cancellation, validation, and compatibility span every layer.
 
 ## Documentation
 
-The REST API documentation can be found on [platform.openai.com](https://platform.openai.com/docs/api-reference). The full API of this library can be found in [api.md](api.md).
+Use this README as the public-facing design map. A working repository should eventually link to its **own** API reference, schema, migration notes, examples, threat model, release policy, and contribution guide. Do not point users to upstream documentation as if it documented independent implementations.
+
+For each implemented feature, document its supported request/response contract, authentication, errors, retries, timeout/cancellation behavior, and both synchronous and asynchronous use where applicable. Label experimental or unimplemented interfaces explicitly.
 
 ## Installation
 
+Choose a package/distribution name only when the actual project exists and the name is available. Publish verified wheels/sdists with a declared Python compatibility range, signed or traceable artifacts where available, and a reproducible dependency lock for development.
+
 ```sh
-# install from PyPI
-pip install openai
+# Placeholder only; replace after the package exists and has been published.
+python -m pip install your-package-name
 ```
+
+Do not install a third-party package merely because its name resembles the placeholder. State optional transport, signing, and cloud-auth dependencies separately from the minimal core.
 
 ## Usage
 
-The full API of this library can be found in [api.md](api.md).
-
-The primary API for interacting with OpenAI models is the [Responses API](https://developers.openai.com/api/reference/resources/responses). You can generate text from the model with the code below.
+A proposed API surface is shown below. It is **not** a claim that the `your_sdk` module exists:
 
 ```python
 import os
-from openai import OpenAI
+from your_sdk import Client  # illustrative interface, not a published import
 
-client = OpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-)
-
-response = client.responses.create(
-    model="gpt-5.5",
-    instructions="You are a coding assistant that talks like a pirate.",
-    input="How do I check if a Python object is an instance of a class?",
-)
-
-print(response.output_text)
+with Client(
+    base_url=os.environ["SERVICE_API_BASE_URL"],
+    token=os.environ.get("SERVICE_API_TOKEN"),
+    timeout=30.0,
+) as client:
+    result = client.request("GET", "/resources", params={"limit": 10})
+    print(result)
 ```
 
-The previous standard (supported indefinitely) for generating text is the [Chat Completions API](https://platform.openai.com/docs/api-reference/chat). You can use that API to generate text from the model with the code below.
+**Composition rules:** accept the endpoint as configuration; validate scheme/origin; make auth replaceable; make retries explicit and safe; expose request IDs; avoid silently changing JSON shapes; separate per-request overrides from immutable client settings; close connections deterministically. Resource helpers can wrap the request layer without obscuring underlying HTTP semantics.
 
-```python
-from openai import OpenAI
-
-client = OpenAI()
-
-completion = client.chat.completions.create(
-    model="gpt-5.5",
-    messages=[
-        {"role": "developer", "content": "Talk like a pirate."},
-        {
-            "role": "user",
-            "content": "How do I check if a Python object is an instance of a class?",
-        },
-    ],
-)
-
-print(completion.choices[0].message.content)
-```
-
-While you can provide an `api_key` keyword argument,
-we recommend using [python-dotenv](https://pypi.org/project/python-dotenv/)
-to add `OPENAI_API_KEY="My API Key"` to your `.env` file
-so that your API key is not stored in source control.
-[Get an API key here](https://platform.openai.com/settings/organization/api-keys).
+Maintain a compatibility contract for typed request/response models; never imply every provider implements the same resource names, parameters, or streaming formats. Use capability detection or explicit adapter configuration.
 
 ### Workload Identity Authentication
 
-For secure, automated environments like cloud-managed Kubernetes, Azure, and Google Cloud Platform, you can use workload identity authentication with short-lived tokens from cloud identity providers instead of long-lived API keys.
+A portable authentication interface obtains credentials at request time without tying the core client to a single identity provider. It should support refresh, expiration, scope/audience binding, and safe concurrency. Never serialize credentials into logs or send them to unapproved origins.
 
-#### Kubernetes (service account tokens)
-
-```python
-from openai import OpenAI
-from openai.auth import k8s_service_account_token_provider
-
-client = OpenAI(
-    workload_identity={
-        "identity_provider_id": "idp-123",
-        "service_account_id": "sa-456",
-        "provider": k8s_service_account_token_provider("/var/run/secrets/kubernetes.io/serviceaccount/token"),
-    },
-)
-
-response = client.chat.completions.create(
-    model="gpt-5.5",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-```
-
-#### Azure (managed identity)
+For example, a token-provider **contract** can be expressed without a proprietary SDK:
 
 ```python
-from openai import OpenAI
-from openai.auth import azure_managed_identity_token_provider
+from collections.abc import Callable
 
-client = OpenAI(
-    workload_identity={
-        "identity_provider_id": "idp-123",
-        "service_account_id": "sa-456",
-        "provider": azure_managed_identity_token_provider(
-            resource="https://management.azure.com/",
-        ),
-    },
-)
+# An adapter may receive a provider returning short-lived access tokens.
+TokenProvider = Callable[[], str]
 ```
 
-#### Google Cloud Platform (compute engine metadata)
+Adapters must define who owns refresh, caching, cancellation, and retry behavior. A token suitable for one audience or origin may be invalid for another.
 
-```python
-from openai import OpenAI
-from openai.auth import gcp_id_token_provider
+#### Service-account tokens
 
-client = OpenAI(
-    workload_identity={
-        "identity_provider_id": "idp-123",
-        "service_account_id": "sa-456",
-        "provider": gcp_id_token_provider(audience="https://api.openai.com/v1"),
-    },
-)
-```
+In orchestrated environments, read a projected token from a configured, protected file only when the environment supports it. Keep file permissions restrictive; bind the audience to the destination; handle token rotation and reject stale or empty values. Do not hardcode orchestrator paths in the transport layer.
+
+#### Managed workload identity
+
+For managed cloud workloads, delegate token acquisition to a pluggable credential provider. Do not assume a specific cloud metadata endpoint, tenant, environment variable, or CLI is available. Validate the requested audience and avoid falling back silently to user credentials.
+
+#### Identity tokens from metadata endpoints
+
+Metadata-backed credentials can be useful but also create SSRF and credential-exfiltration risks. Allow only well-defined metadata destinations, never send arbitrary user-provided URLs to metadata services, and document platform-specific protections in the corresponding adapter.
 
 #### Custom subject token provider
 
-```python
-from openai import OpenAI
-
-
-def get_custom_token() -> str:
-    return "your-jwt-token"
-
-
-client = OpenAI(
-    workload_identity={
-        "identity_provider_id": "idp-123",
-        "service_account_id": "sa-456",
-        "provider": {
-            "token_type": "jwt",
-            "get_token": get_custom_token,
-        },
-    }
-)
-```
-
-You can also customize the token refresh buffer (default is 1200 seconds (20 minutes) before expiration):
-
-```python
-from openai import OpenAI
-from openai.auth import k8s_service_account_token_provider
-
-client = OpenAI(
-    workload_identity={
-        "identity_provider_id": "idp-123",
-        "service_account_id": "sa-456",
-        "provider": k8s_service_account_token_provider("/var/token"),
-        "refresh_buffer_seconds": 120.0,
-    }
-)
-```
+Accept a caller-supplied callable or credential object with an explicit lifetime policy. Make its exception behavior deterministic; refresh before expiry without stampeding requests; isolate state across clients. An adapter must not share tokens across unrelated scopes or configured services.
 
 #### X.509 workload identity (mutual TLS)
 
-For X.509 workload identity federation, configure the client certificate and
-server trust on an HTTPX2 client, then pass only the identity-provider and
-service-account IDs to the SDK:
-
-```python
-import os
-import ssl
-
-from openai import OpenAI, DefaultHttpx2Client
-from openai.auth import x509_workload_identity
-
-tls_context = ssl.create_default_context(
-    cafile=os.getenv("OPENAI_MTLS_CA_BUNDLE"),
-)
-tls_context.load_cert_chain(
-    certfile=os.environ["OPENAI_MTLS_CERTIFICATE_CHAIN"],
-    keyfile=os.environ["OPENAI_MTLS_PRIVATE_KEY"],
-    password=os.getenv("OPENAI_MTLS_PRIVATE_KEY_PASSWORD"),
-)
-
-client = OpenAI(
-    workload_identity=x509_workload_identity(
-        identity_provider_id=os.environ["OPENAI_IDENTITY_PROVIDER_ID"],
-        service_account_id=os.environ["OPENAI_SERVICE_ACCOUNT_ID"],
-        # refresh_buffer_seconds=120.0,
-    ),
-    http_client=DefaultHttpx2Client(
-        verify=tls_context,
-        follow_redirects=False,
-    ),
-)
-```
-
-X.509 mode defaults to `https://mtls.api.openai.com/v1` when neither `base_url`
-nor `OPENAI_BASE_URL` is set. The same configured HTTP client presents its
-certificate to the fixed mTLS token-exchange endpoint and to the API. Tokens
-are exchanged lazily, cached, and refreshed automatically. Certificate files,
-private keys, passwords, server trust, proxies, and rotation remain application
-and transport concerns.
-
-X.509 API requests require HTTPS and must stay on the configured API origin.
-The effective HTTP Host authority must match that origin.
-Provider API-key and proxy-only headers cannot be sent to the API alongside
-X.509 authentication.
-Token exchanges do not inherit API request hooks, authentication, or cookies.
-Identity settings are captured when the client is constructed; create a new
-client to change the identity. Azure clients do not support X.509 workload
-identity.
-
-For asynchronous requests, use `AsyncOpenAI` with
-`DefaultAsyncHttpx2Client`. See the complete [sync rollout-toggle
-example](examples/x509_workload_identity.py) and [async rollout-toggle
-example](examples/x509_workload_identity_async.py), which select API-key or
-X.509 authentication with the application-owned `OPENAI_AUTH_MODE`
-environment variable. X.509 workload identity currently supports HTTP APIs;
-Realtime and WebSockets are not included.
+Where supported, bind client certificates and trust roots to a dedicated TLS context and restricted origin. Keep private keys out of the package and logs, disable redirect forwarding of credentials, verify hostnames, support rotation by replacing the connection pool, and close obsolete clients safely. Mutual TLS and bearer-token authentication are distinct protocols and must not be conflated.
 
 ### Vision
 
-With an image URL:
+When an endpoint accepts images or other binary inputs, model their transport explicitly: URL references, byte content, content type, size policy, and ownership of streams. Never assert that every backend supports image analysis. Avoid decoding and re-encoding media unnecessarily; handle multipart uploads and base64 only when the target contract requires them.
 
 ```python
-prompt = "What is in this image?"
-img_url = "https://api.nga.gov/iiif/a2e6da57-3cd1-4235-b20e-95dcaefed6c8/full/!800,800/0/default.jpg"
+from pathlib import Path
 
-response = client.responses.create(
-    model="gpt-5.5",
-    input=[
-        {
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": prompt},
-                {"type": "input_image", "image_url": f"{img_url}"},
-            ],
-        }
-    ],
-)
+image_bytes = Path("path/to/image.png").read_bytes()
+content_type = "image/png"
+# Pass bytes and content_type through an adapter that actually supports images.
 ```
 
-With the image as a base64 encoded string:
-
-```python
-import base64
-from openai import OpenAI
-
-client = OpenAI()
-
-prompt = "What is in this image?"
-with open("path/to/image.png", "rb") as image_file:
-    b64_image = base64.b64encode(image_file.read()).decode("utf-8")
-
-response = client.responses.create(
-    model="gpt-5.5",
-    input=[
-        {
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": prompt},
-                {"type": "input_image", "image_url": f"data:image/png;base64,{b64_image}"},
-            ],
-        }
-    ],
-)
-```
+Reject unsafe file paths, validate caller-declared media types when appropriate, and apply protocol-defined limits—not arbitrary global caps.
 
 ## Async usage
 
-Simply import `AsyncOpenAI` instead of `OpenAI` and use `await` with each API call:
+Expose an asynchronous interface only when the underlying transport and adapters genuinely support it. Sync and async APIs should share validation rules, request/response models, retry semantics, error types, and default policies, while using separate lifecycle management.
 
 ```python
-import os
 import asyncio
-from openai import AsyncOpenAI
-
-client = AsyncOpenAI(
-    # This is the default and can be omitted
-    api_key=os.environ.get("OPENAI_API_KEY"),
-)
-
-
-async def main() -> None:
-    response = await client.responses.create(
-        model="gpt-5.5", input="Explain disestablishmentarianism to a smart five year old."
-    )
-    print(response.output_text)
-
-
-asyncio.run(main())
-```
-
-Functionality between the synchronous and asynchronous clients is otherwise identical.
-
-### With aiohttp
-
-By default, the async client uses HTTPX2. For improved concurrency performance, you may also use `aiohttp` as the HTTPX2 transport.
-
-You can enable this by installing `aiohttp`:
-
-```sh
-# install from PyPI
-pip install openai[aiohttp]
-```
-
-Then you can enable it by instantiating the client with `http_client=DefaultAioHttpClient()`:
-
-```python
 import os
-import asyncio
-from openai import DefaultAioHttpClient
-from openai import AsyncOpenAI
+from your_sdk import AsyncClient  # illustrative interface
 
+async def main():
+    async with AsyncClient(base_url=os.environ["SERVICE_API_BASE_URL"]) as client:
+        return await client.request("GET", "/resources")
 
-async def main() -> None:
-    async with AsyncOpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),  # This is the default and can be omitted
-        http_client=DefaultAioHttpClient(),
-    ) as client:
-        chat_completion = await client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Say this is a test",
-                }
-            ],
-            model="gpt-5.5",
-        )
-
-
-asyncio.run(main())
+# asyncio.run(main())  # enable after a real AsyncClient is implemented
 ```
 
-### HTTPX2 migration
+Cancellation must close pending streams and release pool resources promptly; do not swallow cancellation or spawn untracked background work.
 
-HTTPX2 is the default HTTP client. If you configure a custom HTTP client, transport, timeout, authentication handler, event hook, or request mock, see the [HTTPX2 migration guide](httpx2.md).
+### With an optional async transport
+
+Keep the HTTP adapter behind a small protocol so an implementation can choose a maintained asynchronous HTTP library without exposing that choice in the core public API. Verify connection limits, timeout layering, TLS policy, proxy routing, cancellation, decompression, and resource cleanup for each supported transport.
+
+### HTTP transport migration
+
+A transport swap is a potentially breaking change even when high-level methods stay stable. Compare redirects, exception mapping, timeout defaults, HTTP/2 behavior, proxy authentication, streaming interfaces, TLS configuration, and connection pooling. Supply a migration guide and tests instead of claiming interchangeable semantics.
 
 ## Streaming responses
 
-We provide support for streaming responses using Server-Sent Events (SSE).
+Support streaming only where the endpoint explicitly defines a streaming protocol (such as SSE, JSON Lines, or framed binary messages). Parse incrementally across arbitrary chunk boundaries; do not assume a chunk equals one event. Provide sync and async iterators where implemented and close streams on exhaustion, errors, or cancellation.
 
 ```python
-from openai import OpenAI
-
-client = OpenAI()
-
-stream = client.responses.create(
-    model="gpt-5.5",
-    input="Write a one-sentence bedtime story about a unicorn.",
-    stream=True,
-)
-
-for event in stream:
-    print(event)
+# Illustrative only; real event types must come from a documented endpoint.
+with client.stream("GET", "/events") as events:
+    for event in events:
+        handle(event)
 ```
 
-The async client uses the exact same interface.
-
-```python
-import asyncio
-from openai import AsyncOpenAI
-
-client = AsyncOpenAI()
-
-
-async def main():
-    stream = await client.responses.create(
-        model="gpt-5.5",
-        input="Write a one-sentence bedtime story about a unicorn.",
-        stream=True,
-    )
-
-    async for event in stream:
-        print(event)
-
-
-asyncio.run(main())
-```
+Apply bounded buffering, backpressure, heartbeat handling, and an explicit termination/error model. Avoid retrying after partial irreversible stream side effects without a documented resume mechanism.
 
 ## Realtime API
 
-The Realtime API enables you to build low-latency, multi-modal conversational experiences. It currently supports text and audio as both input and output, as well as [function calling](https://platform.openai.com/docs/guides/function-calling) through a WebSocket connection.
+Realtime transports—WebSocket, SSE, or another duplex protocol—need their own connection, state, authentication, reconnection, and event-ordering policies. A provider-neutral core should not hardcode event names from a particular service. Document message acknowledgments, progress, idle timeouts, interruption, deduplication, and whether resumption is supported.
 
-Under the hood the SDK uses the [`websockets`](https://websockets.readthedocs.io/en/stable/) library to manage connections.
-
-The retained `client.beta.realtime` interface does not exchange workload-identity tokens or sign Bedrock requests. A client using either method must supply its own `Authorization` settings through `default_headers` or `connect(extra_headers=...)`. Otherwise, the SDK rejects the WebSocket connection locally.
-
-Connection headers override default headers case-insensitively, and `omit` removes a header. These settings preserve the caller's header choices without enabling provider authentication. X.509 workload identity supports HTTP only. Beta WebSockets always reject X.509 clients, even with explicit headers.
-
-The Realtime API works through a combination of client-sent events and server-sent events. Clients can send events to do things like update session configuration or send text and audio inputs. Server events confirm when audio responses have completed, or when a text response from the model has been received. A full event reference can be found [here](https://platform.openai.com/docs/api-reference/realtime-client-events) and a guide can be found [here](https://platform.openai.com/docs/guides/realtime).
-
-Basic text based example:
-
-```py
-import asyncio
-from openai import AsyncOpenAI, OpenAIError
-
-
-async def main():
-    client = AsyncOpenAI()
-
-    async with client.realtime.connect(model="gpt-realtime-2") as connection:
-        await connection.session.update(session={"type": "realtime", "output_modalities": ["text"]})
-
-        await connection.conversation.item.create(
-            item={
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Say hello!"}],
-            }
-        )
-        await connection.response.create()
-
-        async for event in connection:
-            if event.type == "response.output_text.delta":
-                print(event.delta, flush=True, end="")
-
-            elif event.type == "response.output_text.done":
-                print()
-
-            elif event.type == "response.done":
-                if event.response.status != "completed":
-                    raise OpenAIError("The Realtime response did not complete")
-                break
-            elif event.type == "error":
-                raise OpenAIError("Realtime returned an error; inspect the event in your application")
-        else:
-            raise OpenAIError("Realtime disconnected before response.done")
-
-
-asyncio.run(main())
-```
-
-However the real magic of the Realtime API is handling audio inputs / outputs, see this example [TUI script](https://github.com/openai/openai-python/blob/main/examples/realtime/push_to_talk_app.py) for a fully fledged example.
+Never infer success from a closed socket alone; distinguish complete, cancelled, interrupted, and failed sessions. Authenticate new connections explicitly and restrict credential-bearing redirects.
 
 ### Realtime error handling
 
-Whenever an error occurs, the Realtime API will send an [`error` event](https://platform.openai.com/docs/guides/realtime-model-capabilities#error-handling) and the connection will stay open and remain usable. This means you need to handle it yourself, as _no errors are raised directly_ by the SDK when an `error` event comes in.
-
-```py
-client = AsyncOpenAI()
-
-async with client.realtime.connect(model="gpt-realtime-2") as connection:
-    ...
-    async for event in connection:
-        if event.type == "error":
-            print(event.error.type)
-            print(event.error.code)
-            print(event.error.event_id)
-            print(event.error.message)
-```
-
-Use the [Translation session helper](docs/realtime-translation.md) to send audio, finish input, and receive final events.
+Define a typed error envelope with an error code, human-readable message, optional request/event identifier, retryability, and redacted diagnostics. Some protocols report errors as events without closing the connection; applications must handle both event-level failures and transport exceptions. Avoid unbounded automatic reconnect loops.
 
 ## Using types
 
-Nested request parameters are [TypedDicts](https://docs.python.org/3/library/typing.html#typing.TypedDict). Responses are [Pydantic models](https://docs.pydantic.dev) which also provide helper methods for things like:
+Generate types from the **chosen project's** API schema when one exists, or maintain carefully reviewed handwritten models. Distinguish required, optional, nullable, unknown, and deprecated fields. Preserve unknown response fields where forward compatibility requires it; avoid accepting silently invalid request values.
 
-- Serializing back into JSON, `model.to_json()`
-- Converting to a dictionary, `model.to_dict()`
-
-Typed requests and responses provide autocomplete and documentation within your editor. If you would like to see type errors in VS Code to help catch bugs earlier, set `python.analysis.typeCheckingMode` to `basic`.
+Provide typed request parameters, response objects, discriminator unions, and round-trip serialization tests. Schema generation should be reproducible; generated files must not be hand-edited without ownership documentation.
 
 ## Pagination
 
-List methods in the OpenAI API are paginated.
-
-This library provides auto-paginating iterators with each list response, so you do not have to request successive pages manually:
+Represent continuation as opaque provider data. Do not assume page numbers, offset keys, cursor directions, or stable ordering. Support manual pagination and a convenience iterator without making extra requests unexpectedly in performance-sensitive code.
 
 ```python
-from openai import OpenAI
-
-client = OpenAI()
-
-all_jobs = []
-# Automatically fetches more pages as needed.
-for job in client.fine_tuning.jobs.list(
-    limit=20,
-):
-    # Do something with job here
-    all_jobs.append(job)
-print(all_jobs)
-```
-
-Or, asynchronously:
-
-```python
-import asyncio
-from openai import AsyncOpenAI
-
-client = AsyncOpenAI()
-
-
-async def main() -> None:
-    all_jobs = []
-    # Iterate through items across all pages, issuing requests as needed.
-    async for job in client.fine_tuning.jobs.list(
-        limit=20,
-    ):
-        all_jobs.append(job)
-    print(all_jobs)
-
-
-asyncio.run(main())
-```
-
-Alternatively, you can use the `.has_next_page()`, `.next_page_info()`, or `.get_next_page()` methods for more granular control working with pages:
-
-```python
-first_page = await client.fine_tuning.jobs.list(
-    limit=20,
-)
-if first_page.has_next_page():
-    print(f"will fetch next page using these details: {first_page.next_page_info()}")
-    next_page = await first_page.get_next_page()
-    print(f"number of items we just fetched: {len(next_page.data)}")
-
-# Remove `await` for non-async usage.
-```
-
-Or just work directly with the returned data:
-
-```python
-first_page = await client.fine_tuning.jobs.list(
-    limit=20,
-)
-
-print(f"next page cursor: {first_page.after}")  # => "next page cursor: ..."
-for job in first_page.data:
-    print(job.id)
-
-# Remove `await` for non-async usage.
+# Design sketch; the adapter defines the actual token field.
+page = client.list_resources(limit=20)
+for item in page.items:
+    process(item)
+while page.next_cursor is not None:
+    page = client.list_resources(cursor=page.next_cursor, limit=20)
+    for item in page.items:
+        process(item)
 ```
 
 ## Nested params
 
-Nested parameters are dictionaries, typed using `TypedDict`, for example:
-
-```python
-from openai import OpenAI
-
-client = OpenAI()
-
-response = client.responses.create(
-    input=[
-        {
-            "role": "user",
-            "content": "How much ?",
-        }
-    ],
-    model="gpt-5.5",
-    text={"format": {"type": "json_object"}},
-)
-```
+Serialize nested dictionaries and typed request models according to the service contract. Preserve distinction between omitted and explicit `null`; do not flatten nested structures opportunistically. Encode files, arrays, and query parameters consistently, with tests for escaping and repeated values.
 
 ## File uploads
 
-Request parameters that correspond to file uploads can be passed as `bytes`, a file-like object, a [`PathLike`](https://docs.python.org/3/library/os.html#os.PathLike) instance, or a tuple of `(filename, contents, media type)`.
+Accept file paths, bytes, or file-like objects **if supported by the actual endpoint**. Define who owns handles, whether uploads are rewindable for retries, how MIME types and filenames are inferred, and how multipart boundaries are generated. Never read an unbounded stream into memory merely to calculate its size unless the contract requires it.
 
 ```python
 from pathlib import Path
-from openai import OpenAI
 
-client = OpenAI()
-
-client.files.create(
-    file=Path("input.jsonl"),
-    purpose="fine-tune",
-)
+file_path = Path("path/to/input.dat")
+# The real adapter decides whether to stream, chunk, or use multipart encoding.
 ```
-
-When uploading an in-memory file-like object such as `io.BytesIO`, include a filename when the API needs the file extension to determine its format. Passing a tuple is the most explicit option:
-
-```python
-import io
-
-audio = io.BytesIO(audio_bytes)
-transcription = client.audio.transcriptions.create(
-    model="gpt-4o-transcribe",
-    file=("audio.wav", audio, "audio/wav"),
-)
-```
-
-You can also set a `.name` attribute such as `audio.name = "audio.wav"` on a mutable file-like object before passing it directly. Without a filename, multipart transports may use a generic name such as `upload`, which does not provide an audio extension for format detection.
-
-The async client uses the exact same interface. If you pass a [`PathLike`](https://docs.python.org/3/library/os.html#os.PathLike) instance, the file contents will be read asynchronously automatically.
 
 ## Webhook Verification
 
-Verifying webhook signatures is _optional but encouraged_.
-
-For more information about webhooks, see [the API docs](https://platform.openai.com/docs/guides/webhooks).
+Verify authenticity **before** parsing or acting on user-controlled payloads. Specify which bytes are signed, canonicalization rules, signed headers, allowed clock skew, and replay protection. Do not infer that all services use the same signing algorithm or header names.
 
 ### Parsing webhook payloads
 
-For most use cases, you will likely want to verify the webhook and parse the payload at the same time. To achieve this, we provide the method `client.webhooks.unwrap()`, which parses a webhook request and verifies that it was sent by OpenAI. This method will raise an error if the signature is invalid.
-
-Note that the `body` parameter must be the raw JSON string sent from the server (do not parse it first). The `.unwrap()` method will parse this JSON for you into an event object after verifying the webhook was sent from OpenAI.
-
-```python
-from openai import OpenAI
-from flask import Flask, request
-
-app = Flask(__name__)
-client = OpenAI()  # OPENAI_WEBHOOK_SECRET environment variable is used by default
-
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    request_body = request.get_data(as_text=True)
-
-    try:
-        event = client.webhooks.unwrap(request_body, request.headers)
-
-        if event.type == "response.completed":
-            print("Response completed:", event.data)
-        elif event.type == "response.failed":
-            print("Response failed:", event.data)
-        else:
-            print("Unhandled event type:", event.type)
-
-        return "ok"
-    except Exception as e:
-        print("Invalid signature:", e)
-        return "Invalid signature", 400
-
-
-if __name__ == "__main__":
-    app.run(port=8000)
-```
+A safe handler first enforces a protocol-defined size policy, captures the exact raw body, checks signatures/timestamps, then deserializes with schema validation. Authentication and JSON syntax are different checks; valid JSON is not evidence of a trusted sender.
 
 ### Verifying webhook payloads directly
 
-In some cases, you may want to verify the webhook separately from parsing the payload. If you prefer to handle these steps separately, we provide the method `client.webhooks.verify_signature()` to _only verify_ the signature of a webhook request. Like `.unwrap()`, this method will raise an error if the signature is invalid.
-
-Note that the `body` parameter must be the raw JSON string sent from the server (do not parse it first). You will then need to parse the body after verifying the signature.
+An HMAC-SHA256 recipe for a protocol that explicitly specifies HMAC-SHA256 might use:
 
 ```python
-import json
-from openai import OpenAI
-from flask import Flask, request
+import hashlib
+import hmac
 
-app = Flask(__name__)
-client = OpenAI()  # OPENAI_WEBHOOK_SECRET environment variable is used by default
-
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    request_body = request.get_data(as_text=True)
-
-    try:
-        client.webhooks.verify_signature(request_body, request.headers)
-
-        # Parse the body after verification
-        event = json.loads(request_body)
-        print("Verified event:", event)
-
-        return "ok"
-    except Exception as e:
-        print("Invalid signature:", e)
-        return "Invalid signature", 400
-
-
-if __name__ == "__main__":
-    app.run(port=8000)
+def verify_hmac_sha256(raw_body: bytes, signature_hex: str, secret: bytes) -> bool:
+    expected = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_hex)
 ```
+
+This is a **component example**, not a complete webhook verification protocol: it does not validate signature framing, timestamps, key IDs, or replay windows. Follow the sending service's documented scheme and test exact byte handling.
 
 ## Handling errors
 
-When the library is unable to connect to the API (for example, due to network connection problems or a timeout), a subclass of `openai.APIConnectionError` is raised.
+Map failures to a stable, documented hierarchy without losing the original cause. Preserve HTTP status, provider error code if available, retry hint, request ID, and a **sanitized** diagnostic message. Avoid placing entire response bodies, authorization headers, or personal data into exceptions by default.
 
-When the API returns a non-success status code (that is, 4xx or 5xx
-response), a subclass of `openai.APIStatusError` is raised, containing `status_code` and `response` properties.
-
-All errors inherit from `openai.APIError`.
-
-When consuming a `Stream` or `AsyncStream`, read timeouts raise `APITimeoutError`
-and other HTTPX request failures raise `APIConnectionError`. Catch these SDK
-exceptions instead of raw HTTPX exceptions; the original exception is available
-as `__cause__`. Stream consumption is not automatically retried, because replaying
-a request could duplicate output already delivered to your application.
-The Assistants event-handler helpers and raw `with_streaming_response` iterators
-retain their existing exception behavior.
-
-```python
-import openai
-from openai import OpenAI
-
-client = OpenAI()
-
-try:
-    client.fine_tuning.jobs.create(
-        model="gpt-4o",
-        training_file="file-abc123",
-    )
-except openai.APIConnectionError as e:
-    print("The server could not be reached")
-    print(e.__cause__)  # an underlying Exception, likely raised within HTTPX2.
-except openai.RateLimitError as e:
-    print("A 429 status code was received; we should back off a bit.")
-except openai.APIStatusError as e:
-    print("Another non-200-range status code was received")
-    print(e.status_code)
-    print(e.response)
-```
-
-Error codes are as follows:
-
-| Status Code | Error Type                 |
-| ----------- | -------------------------- |
-| 400         | `BadRequestError`          |
-| 401         | `AuthenticationError`      |
-| 403         | `PermissionDeniedError`    |
-| 404         | `NotFoundError`            |
-| 422         | `UnprocessableEntityError` |
-| 429         | `RateLimitError`           |
-| >=500       | `InternalServerError`      |
-| N/A         | `APIConnectionError`       |
+| Failure class | Expected handling |
+| --- | --- |
+| Connection / DNS / TLS | Classify and attach safe cause; retry only when appropriate |
+| Timeout / cancellation | Differentiate caller cancellation from network timeout |
+| Rate limit / unavailable | Respect bounded `Retry-After`, backoff, and idempotency |
+| Authentication / permission | Fail without leaking secrets or blindly retrying |
+| Validation / unexpected schema | Surface actionable details without silently coercing data |
+| Streaming / partial response | Report incomplete output and preserve cleanup guarantees |
 
 ## Request IDs
 
-> For more information on debugging requests, see [these docs](https://platform.openai.com/docs/api-reference/debugging-requests)
-
-All object responses in the SDK provide a `_request_id` property which is added from the `x-request-id` response header so that you can quickly log failing requests and report them back to OpenAI.
-
-```python
-response = await client.responses.create(
-    model="gpt-5.5",
-    input="Say 'this is a test'.",
-)
-print(response._request_id)  # req_123
-```
-
-Note that unlike other properties that use an `_` prefix, the `_request_id` property
-_is_ public. Unless documented otherwise, _all_ other `_` prefix properties,
-methods and modules are _private_.
-
-> [!IMPORTANT]  
-> If you need to access request IDs for failed requests you must catch the `APIStatusError` exception
-
-```python
-import openai
-
-try:
-    completion = await client.chat.completions.create(
-        messages=[{"role": "user", "content": "Say this is a test"}], model="gpt-5.5"
-    )
-except openai.APIStatusError as exc:
-    print(exc.request_id)  # req_123
-    raise exc
-```
+Expose a sanitized request or correlation ID when supplied by the server or transport. Accept caller-provided trace context only under documented rules and avoid leaking it between independent sessions. Correlate requests and errors without logging raw credentials or user content.
 
 ## Retries
 
-Certain errors are automatically retried 2 times by default, with a short exponential backoff.
-Connection errors (for example, due to a network connectivity problem), 408 Request Timeout, 409 Conflict,
-429 Rate Limit, and >=500 Internal errors are all retried by default.
+Use a bounded retry budget, exponential backoff with jitter, and server retry hints only when safe. Default retryability should depend on transport failure, HTTP status, body replayability, and idempotency—not merely on an exception name. Never duplicate non-idempotent actions unless the endpoint provides an idempotency key or an explicit safety guarantee.
 
-Requests are retried only when their body can be safely resent.
-
-You can use the `max_retries` option to configure or disable retry settings:
-
-```python
-from openai import OpenAI
-
-# Configure the default for all requests:
-client = OpenAI(
-    # default is 2
-    max_retries=0,
-)
-
-# Or, configure per-request:
-client.with_options(max_retries=5).chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "How can I get the name of the current day in JavaScript?",
-        }
-    ],
-    model="gpt-5.5",
-)
-```
-
-`max_retries` must be a non-negative integer. `0` disables retries. Use a large
-integer, such as `1000`, for a larger retry budget. Other values raise an error
-before a request is sent.
-
-Application exceptions raised by custom transports or hooks propagate unchanged,
-including task-executor cancellation signals.
+Disclose default attempts, maximum delay, per-request overrides, and the relationship between retry delays and total deadlines.
 
 ## Timeouts
 
-By default requests time out after 10 minutes. You can configure this with a `timeout` option,
-which accepts a float or an [`httpx2.Timeout`](https://httpx2.pydantic.dev/) object:
-
-```python
-import httpx2
-from openai import OpenAI
-
-# Configure the default for all requests:
-client = OpenAI(
-    # 20 seconds (default is 10 minutes)
-    timeout=20.0,
-)
-
-# More granular control:
-client = OpenAI(
-    timeout=httpx2.Timeout(60.0, read=5.0, write=10.0, connect=2.0),
-)
-
-# Override per-request:
-client.with_options(timeout=5.0).chat.completions.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "How can I list all files in a directory using Python?",
-        }
-    ],
-    model="gpt-5.5",
-)
-```
-
-On timeout, an `APITimeoutError` is thrown.
-
-Note that requests that time out are [retried twice by default](#retries).
+Define connect, read, write, pool-acquisition, and total-operation timeouts where supported. A total deadline must include retries and backoff. Offer per-client and per-request overrides with validation, and keep cancellation usable for sync and async transports alike.
 
 ## Advanced
 
+Advanced configuration must remain opt-in. Avoid exposing internal transport objects as permanent compatibility promises unless they are deliberately part of the public interface.
+
 ### Logging
 
-We use the standard library [`logging`](https://docs.python.org/3/library/logging.html) module.
-
-You can enable logging by setting the environment variable `OPENAI_LOG` to `info`.
-
-```shell
-$ export OPENAI_LOG=info
-```
-
-Or to `debug` for more verbose logging. Set it to `warning`, `error`, or `critical`
-to show only messages at that level or higher. `OPENAI_LOG` configures the `openai`
-logger; configure HTTP transport loggers separately using Python logging.
+Provide structured, opt-in logs for endpoint identity, method, duration, status, retry count, and request ID. Redact headers, query parameters, bodies, cookies, and credentials by default. Keep logging behavior deterministic across sync and async clients, and document telemetry opt-in/out.
 
 ### How to tell whether `None` means `null` or missing
 
-In an API response, a field may be explicitly `null`, or missing entirely; in either case, its value is `None` in this library. You can differentiate the two cases with `.model_fields_set`:
+Use an explicit sentinel for an omitted field and reserve `None` for JSON `null` when the schema differentiates them. Keep the distinction through parse, validation, and serialization. Do not auto-fill absent data with fabricated defaults.
 
-```py
-if response.my_field is None:
-    if "my_field" not in response.model_fields_set:
-        print('Got json like {}, without a "my_field" key present at all.')
-    else:
-        print('Got json like {"my_field": null}.')
+```python
+UNSET = object()
+value = UNSET  # omitted; not the same as JSON null (None)
 ```
 
 ### Accessing raw response data (e.g. headers)
 
-The "raw" Response object can be accessed by prefixing `.with_raw_response.` to any HTTP method call, e.g.,
-
-```py
-from openai import OpenAI
-
-client = OpenAI()
-response = client.chat.completions.with_raw_response.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-5.5",
-)
-print(response.headers.get("X-My-Header"))
-
-completion = response.parse()  # get the object that `chat.completions.create()` would have returned
-print(completion)
-```
-
-These methods return a [`LegacyAPIResponse`](https://github.com/openai/openai-python/tree/main/src/openai/_legacy_response.py) object. This is a legacy class as we're changing it slightly in the next major version.
-
-For the sync client this will mostly be the same with the exception
-of `content` & `text` will be methods instead of properties. In the
-async client, all methods will be async.
-
-A migration script will be provided & the migration in general should
-be smooth.
+Expose raw status, selected headers, final URL, timing, and response bytes through an explicit lower-level escape hatch. Make it clear when the body is buffered and which operations consume a stream. Preserve security filtering even in raw and debug modes.
 
 #### `.with_streaming_response`
 
-The above interface eagerly reads the full response body when you make the request, which may not always be what you want.
-
-To stream the response body, use `.with_streaming_response` instead, which requires a context manager and only reads the response body once you call `.read()`, `.text()`, `.json()`, `.iter_bytes()`, `.iter_text()`, `.iter_lines()` or `.parse()`. In the async client, these are async methods.
-
-As such, `.with_streaming_response` methods return a different [`APIResponse`](https://github.com/openai/openai-python/tree/main/src/openai/_response.py) object, and the async client returns an [`AsyncAPIResponse`](https://github.com/openai/openai-python/tree/main/src/openai/_response.py) object.
-
-```python
-with client.chat.completions.with_streaming_response.create(
-    messages=[
-        {
-            "role": "user",
-            "content": "Say this is a test",
-        }
-    ],
-    model="gpt-5.5",
-) as response:
-    print(response.headers.get("X-My-Header"))
-
-    for line in response.iter_lines():
-        print(line)
-```
-
-The context manager is required so that the response will reliably be closed.
+If a streaming-response convenience interface is implemented, prefer context management to guarantee closure. Do not require callers to rely on garbage collection; make body-reading methods explicit and detect use-after-close conditions.
 
 ### Making custom/undocumented requests
 
-This library is typed for convenient access to the documented API.
-
-If you need to access undocumented endpoints, params, or response properties, the library can still be used.
+Permit optional custom endpoints only if doing so is compatible with the project's security and stability model. Generic request helpers should still enforce the configured origin, TLS, authentication boundaries, timeouts, and error filtering.
 
 #### Undocumented endpoints
 
-To make requests to undocumented endpoints, you can make requests using `client.get`, `client.post`, and other
-http verbs. Options on the client will be respected (such as retries) when making this request.
-
-```py
-import httpx2
-
-response = client.post(
-    "/foo",
-    cast_to=httpx2.Response,
-    body={"my_param": True},
-)
-
-print(response.headers.get("x-foo"))
-```
+Treat unsupported paths as experimental: do not promise typing, response schemas, or compatibility without a contract. Never allow a caller-provided path to silently switch hosts or bypass security controls.
 
 #### Undocumented request params
 
-If you want to explicitly send an extra param, you can do so with the `extra_query`, `extra_body`, and `extra_headers` request
-options.
+A narrowly scoped extension mechanism may pass through additional parameters; keep collisions, reserved names, and serialization behavior explicit. Validate values before logging or transmission.
 
 #### Undocumented response properties
 
-To access undocumented response properties, you can access the extra fields like `response.unknown_prop`. You
-can also get all the extra fields on the Pydantic model as a dict with
-[`response.model_extra`](https://docs.pydantic.dev/latest/api/base_model/#pydantic.BaseModel.model_extra).
+Preserve unknown fields when feasible; clearly separate raw data access from typed, supported properties. Schema drift must be observable and testable, not silently normalized into success.
 
 ### Configuring the HTTP client
 
-You can override the [HTTPX2 client](https://httpx2.pydantic.dev/) to customize proxies, transports, authentication, event hooks, and other advanced HTTP behavior. See the [HTTPX2 migration guide](httpx2.md) when updating an existing custom client.
-
-```python
-import httpx2
-from openai import OpenAI, DefaultHttpx2Client
-
-client = OpenAI(
-    # Or use the `OPENAI_BASE_URL` env var
-    base_url="http://my.test.server.example.com:8083/v1",
-    http_client=DefaultHttpx2Client(
-        proxy="http://my.test.proxy.example.com",
-        transport=httpx2.HTTPTransport(local_address="0.0.0.0"),
-    ),
-)
-```
-
-You can also customize the client on a per-request basis by using `with_options()`:
-
-```python
-client.with_options(http_client=DefaultHttpx2Client(...))
-```
+Provide a replaceable transport abstraction for certificates, proxies, pooling, event hooks, and testing. Use origin-bound authentication; refuse unsafe credential forwarding on redirects; support trusted CA bundles and default TLS verification. Test proxy and no-proxy behavior and keep transport customization separate from API business logic.
 
 #### Mutual TLS
 
-Before configuring a client, review the
-[OpenAI Mutual TLS Beta Program](https://help.openai.com/en/articles/10876024-openai-mutual-tls-beta-program)
-for enrollment, currently supported endpoints, and certificate requirements.
-
-For API-key authenticated HTTP requests that require mutual TLS (mTLS), configure
-a native [`ssl.SSLContext`](https://docs.python.org/3/library/ssl.html#ssl.SSLContext)
-and pass it through the custom HTTP client:
-
-```python
-import os
-import ssl
-
-from openai import OpenAI, DefaultHttpx2Client
-
-# Server trust is configured independently. Without `cafile`, this uses the
-# operating system's normal trusted certificate authorities.
-ssl_context = ssl.create_default_context(
-    cafile=os.environ.get("OPENAI_MTLS_CA_BUNDLE"),
-)
-ssl_context.load_cert_chain(
-    # This PEM must contain the leaf certificate first, followed by every
-    # intermediate certificate needed to reach the server's trust anchor.
-    certfile=os.environ["OPENAI_MTLS_CERTIFICATE_CHAIN"],
-    keyfile=os.environ["OPENAI_MTLS_PRIVATE_KEY"],
-    password=os.environ.get("OPENAI_MTLS_PRIVATE_KEY_PASSWORD"),
-)
-
-client = OpenAI(
-    api_key=os.environ["OPENAI_API_KEY"],
-    # A custom HTTP client does not tell the SDK that mTLS is configured, so
-    # select the mTLS endpoint explicitly. Preserve an EU or custom override.
-    base_url=os.environ.get(
-        "OPENAI_BASE_URL",
-        "https://mtls.api.openai.com/v1",
-    ),
-    # A client certificate belongs to the HTTP client, not the base URL.
-    # Disable redirects so it cannot follow a response to another origin.
-    http_client=DefaultHttpx2Client(
-        verify=ssl_context,
-        follow_redirects=False,
-    ),
-)
-```
-
-The async configuration is equivalent:
-
-```python
-import os
-import ssl
-
-from openai import AsyncOpenAI, DefaultAsyncHttpx2Client
-
-ssl_context = ssl.create_default_context(
-    cafile=os.environ.get("OPENAI_MTLS_CA_BUNDLE"),
-)
-ssl_context.load_cert_chain(
-    certfile=os.environ["OPENAI_MTLS_CERTIFICATE_CHAIN"],
-    keyfile=os.environ["OPENAI_MTLS_PRIVATE_KEY"],
-    password=os.environ.get("OPENAI_MTLS_PRIVATE_KEY_PASSWORD"),
-)
-
-client = AsyncOpenAI(
-    api_key=os.environ["OPENAI_API_KEY"],
-    base_url=os.environ.get(
-        "OPENAI_BASE_URL",
-        "https://mtls.api.openai.com/v1",
-    ),
-    http_client=DefaultAsyncHttpx2Client(
-        verify=ssl_context,
-        follow_redirects=False,
-    ),
-)
-```
-
-See the complete [sync HTTPX2](examples/mtls_httpx2.py) and
-[async HTTPX2](examples/mtls_httpx2_async.py) examples.
-
-The certificate-bearing HTTP client is transport-wide. For API-key mTLS,
-dedicate it to the selected API origin; X.509 workload identity also uses the
-fixed OpenAI mTLS token-exchange origin. Do not reuse the client for unrelated
-services or pass it through `with_options()` with a different `base_url`.
-If redirects are required for API-key mTLS, add an
-HTTPX2 request hook that rejects requests whose scheme, host, or port differs
-from the configured mTLS origin before enabling `follow_redirects`.
-
-`SSLContext.load_cert_chain()` raises during setup for unreadable or malformed
-files and for a private key that does not match the leaf certificate. Certificate
-expiry, key usage, extended key usage, SAN, and trust policy remain TLS server
-decisions. OpenAI does not fetch missing intermediates through AIA, so provide a
-complete, leaf-first client-chain PEM. Intermediate-chain support is currently
-enabled by request. Until it is enabled for your organization, use a client leaf
-certificate directly signed by the uploaded CA.
-
-For certificate rotation, build a new `SSLContext`, HTTP client, and `OpenAI` or
-`AsyncOpenAI` client. This creates a fresh connection pool; close the old SDK
-client after its in-flight requests finish. Do not assume existing TLS
-connections will renegotiate.
-
-This recipe applies to ordinary API-key HTTP traffic. For certificate-backed
-token exchange, use the X.509 workload identity configuration described above.
-Realtime WebSocket mTLS is not included.
+Load certificate and key material into a dedicated, origin-restricted SSL context. Keep trust configuration independent of the client certificate and never disable hostname checks to make an example work. Rotation should build a fresh context/pool and allow outstanding requests to finish or cancel safely.
 
 ### Managing HTTP resources
 
-By default the library closes underlying HTTP connections whenever the client is [garbage collected](https://docs.python.org/3/reference/datamodel.html#object.__del__). You can manually close the client using the `.close()` method if desired, or with a context manager that closes when exiting.
+Support deterministic `close()` / `aclose()` and context managers. Document ownership of external transports, connection pools, live streams, and sockets. Close resources on exceptions and cancellation; do not depend exclusively on garbage collection to release file descriptors.
 
-```py
-from openai import OpenAI
+## Provider integrations
 
-with OpenAI() as client:
-    # make requests here
-    ...
+Integration modules should configure the base URL, protocol dialect, authentication, signing, optional endpoints, versioning, data residency, and provider-specific errors—**without changing the core SDK**. A provider adapter may declare capabilities instead of pretending every vendor supports the same API.
 
-# HTTP client is now closed
-```
+Do not put a provider's trademark or service name in the public neutral package identity. If optional adapters are published, label them accurately and avoid implying endorsement or affiliation.
 
-For `AsyncOpenAI`, use `async with` or `await client.close()` before shutting down
-the event loop. Garbage collection cannot reliably await asynchronous cleanup.
+## Hosted gateway adapters
 
-```py
-import asyncio
-from openai import AsyncOpenAI
+Gateways and managed inference endpoints may add request signing, regional routing, custom certificates, compatibility shims, and extra HTTP headers. Keep those differences isolated and test them with synthetic fixtures. Define where retries, pagination, stream framing, and error mappings are owned; do not invent compatibility with an untested platform.
 
+### Legacy adapters
 
-async def main() -> None:
-    async with AsyncOpenAI() as client:
-        response = await client.responses.create(model="gpt-5.5", input="Say this is a test")
-        print(response.output_text)
-
-
-asyncio.run(main())
-```
-
-## Microsoft Azure OpenAI
-
-To use this library with [Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/overview), use the `AzureOpenAI`
-class instead of the `OpenAI` class.
-
-> [!IMPORTANT]
-> The Azure API shape differs from the core API shape which means that the static types for responses / params
-> won't always be correct.
-
-```py
-from openai import AzureOpenAI
-
-# gets the API Key from environment variable AZURE_OPENAI_API_KEY
-client = AzureOpenAI(
-    # https://learn.microsoft.com/azure/ai-services/openai/reference#rest-api-versioning
-    api_version="2023-07-01-preview",
-    # https://learn.microsoft.com/azure/cognitive-services/openai/how-to/create-resource?pivots=web-portal#create-a-resource
-    azure_endpoint="https://example-endpoint.openai.azure.com",
-)
-
-completion = client.chat.completions.create(
-    model="deployment-name",  # e.g. gpt-35-instant
-    messages=[
-        {
-            "role": "user",
-            "content": "How do I output all files in a directory using Python?",
-        },
-    ],
-)
-print(completion.to_json())
-```
-
-In addition to the options provided in the base `OpenAI` client, the following options are provided:
-
-- `azure_endpoint` (or the `AZURE_OPENAI_ENDPOINT` environment variable)
-- `azure_deployment`
-- `api_version` (or the `OPENAI_API_VERSION` environment variable)
-- `azure_ad_token` (or the `AZURE_OPENAI_AD_TOKEN` environment variable)
-- `azure_ad_token_provider`
-
-An example of using the client with Microsoft Entra ID (formerly known as Azure Active Directory) can be found [here](https://github.com/openai/openai-python/blob/main/examples/azure_ad.py).
-
-## Amazon Bedrock
-
-To use this library with [Amazon Bedrock's OpenAI-compatible API](https://docs.aws.amazon.com/bedrock/latest/userguide/models-api-compatibility.html), configure the standard `OpenAI` client with the Bedrock provider.
-
-Install the optional Bedrock dependencies to use the standard AWS credential chain and SigV4 authentication:
-
-```sh
-pip install 'openai[bedrock]'
-```
-
-```py
-from openai import OpenAI
-from openai.providers import bedrock
-
-# Uses your normal AWS credentials. You can omit region when it is
-# configured through AWS_REGION, AWS_DEFAULT_REGION, or your AWS profile.
-client = OpenAI(
-    provider=bedrock(
-        region="us-west-2",
-    )
-)
-
-response = client.responses.create(
-    model="openai.gpt-5.4",
-    input="Say hello!",
-)
-
-print(response.output_text)
-```
-
-The provider configures AWS authentication and the Bedrock Mantle endpoint while retaining the normal SDK resources, retries, streaming, and error handling. AWS controls which endpoints and features are supported; unsupported calls surface the provider's normal HTTP errors through the SDK.
-
-The default AWS credential chain supports environment credentials, shared credentials and config files, named profiles, SSO and assume-role profiles, and workload credentials such as ECS, EKS, and EC2 metadata. To select a named profile:
-
-```py
-client = OpenAI(
-    provider=bedrock(
-        profile="my-profile",
-    )
-)
-```
-
-You can also pass `access_key_id` and `secret_access_key`, with an optional `session_token`, or a refreshable `credential_provider` that returns botocore-compatible credentials. Explicit bearer and AWS credential options are mutually exclusive.
-
-Pass `base_url` to `bedrock(...)` or set `AWS_BEDROCK_BASE_URL` to override the derived `https://bedrock-mantle.<region>.api.aws/openai/v1` endpoint. Custom URLs retain Mantle signing by default; pass `endpoint="runtime"` to use Runtime signing.
-
-SigV4 requests require replayable, fully serialized request bodies. Standard JSON requests already meet this requirement, and response streaming is unaffected. Low-level one-shot request streams must be buffered before sending, or sent with bearer authentication and retries disabled.
-
-Bearer tokens remain available as a compatibility or manual authentication mode. Set `AWS_BEARER_TOKEN_BEDROCK` to an [Amazon Bedrock API key](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html), pass `api_key`, or provide a refresh callback:
-
-```py
-client = OpenAI(
-    provider=bedrock(
-        region="us-west-2",
-        token_provider=lambda: refresh_bedrock_token(),
-    )
-)
-```
-
-Without explicit authentication, `AWS_BEARER_TOKEN_BEDROCK` takes precedence over the default AWS credential chain for backwards compatibility.
-
-### Legacy `BedrockOpenAI` client
-
-`BedrockOpenAI` and `AsyncBedrockOpenAI` remain available for existing applications and delegate to the same provider implementation. New applications should prefer `OpenAI(provider=bedrock(...))`.
-
-```py
-from openai import BedrockOpenAI
-
-client = BedrockOpenAI(
-    aws_region="us-west-2",
-    aws_profile="my-profile",
-)
-```
-
-The legacy module client also continues to support `openai.api_type = "amazon-bedrock"` or `OPENAI_API_TYPE=amazon-bedrock`.
+Retain compatibility adapters only with documented deprecation windows, migration instructions, security review, and tests. Never silently activate obsolete authentication flows or reintroduce removed dependencies merely because the inspiration source once supported them.
 
 ## Versioning
 
-This package generally follows [SemVer](https://semver.org/spec/v2.0.0.html) conventions, though certain backwards-incompatible changes may be released as minor versions:
-
-1. Changes that only affect static types, without breaking runtime behavior.
-2. Changes to library internals which are technically public but not intended or documented for external use. _(Please open a GitHub issue to let us know if you are relying on such internals.)_
-3. Changes that we do not expect to impact the vast majority of users in practice.
-
-Minimum supported Python version increases are released as minor versions, not patches, when package metadata can keep users on the final compatible SDK release. See the [Python version support policy](./PYTHON_VERSION_POLICY.md) for the support window, release treatment, and compatibility history.
-
-We take backwards-compatibility seriously and work hard to ensure you can rely on a smooth upgrade experience.
-
-We are keen for your feedback; please open an [issue](https://www.github.com/openai/openai-python/issues) with questions, bugs, or suggestions.
+Choose a documented versioning policy (such as Semantic Versioning) and maintain release notes for **this independent project only**. Distinguish package versions from individual provider API versions. Describe breaking changes, support windows, schema regenerations, and deprecations without borrowing upstream version numbers.
 
 ### Determining the installed version
 
-If you've upgraded to the latest version but aren't seeing any new features you were expecting then your python environment is likely still using an older version.
+Once an actual distribution exists, Python packaging metadata can report its version:
 
-You can determine the version that is being used at runtime with:
+```python
+from importlib.metadata import version
 
-```py
-import openai
-
-print(openai.__version__)
+# Replace with the project's real distribution name after publication.
+# print(version("your-package-name"))
 ```
 
 ## Requirements
 
-Python 3.10 or higher.
+Declare the real minimum supported Python version in packaging metadata, not by inheriting a number from an unrelated project. Document required/optional dependencies, platform constraints, TLS requirements, transport feature flags, and the compatibility-test matrix. Until a package is implemented, **no installation or runtime compatibility is claimed**.
 
 ## Contributing
 
-Please share bug reports and feature requests through [GitHub issues](https://github.com/openai/openai-python/issues).
-Pull requests are limited to repository collaborators; we do not accept pull requests from non-collaborators.
-See [CONTRIBUTING.md](https://github.com/openai/openai-python/blob/main/CONTRIBUTING.md) for the contribution policy and development guide.
-For security vulnerabilities, follow [SECURITY.md](https://github.com/openai/openai-python/blob/main/SECURITY.md).
+Contributions should include a scoped proposal, tests, security review where relevant, documentation, and a release note for user-visible changes. Keep core behavior provider-neutral; isolate service-specific exceptions in adapters. Document how to report security issues privately, how generated files are owned, and how to run **actual repository commands** once the codebase and CI exist.
+
+**Source credit and independent ownership:** Inspired by [openai/openai-python](https://github.com/openai/openai-python). Credit does not replace an applicable license, grant permission to reuse trademarks, or establish technical compatibility. Do not copy upstream release claims or package-install instructions into a new project without implementing and validating them.
