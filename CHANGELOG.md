@@ -1,5 +1,23 @@
 # Changelog
 
+> **Provenance and scope:** This file contains the **historical release notes of the [OpenAI Python SDK](https://github.com/openai/openai-python)**, retained as an attributed reference because they were supplied with the source materials. These entries describe the upstream project only. They **do not** identify releases, shipped features, version numbers, or verified compatibility of the independent, provider-neutral project documented in the adapted README. Preserve the upstream links, authorship, and relevant license notices when reusing material.
+>
+> **Independent project:** New releases must be recorded under separately assigned versions after implementation and validation; do not retroactively claim upstream work as your own. Do not treat this reference history as an installation guide or an assertion of compatibility with a specific provider.
+
+## Unreleased — independent documentation adaptation (2026-11-07)
+
+### Documentation
+
+- Adapt the documentation architecture toward a provider-neutral Python API client design, explicitly labeled as a **blueprint**, not as a released SDK.
+- Preserve technical composition requirements for authentication, transport, streaming, typed contracts, cancellation, large payloads, security, tests, and releases.
+- Attribute the original source and clarify that the historical changelog below belongs to the upstream maintainers.
+- Keep the independent project's future release notes distinct from upstream versions, changes, and issue/commit identifiers.
+
+---
+
+**Upstream reference history (preserved verbatim below):**
+
+
 ## [3.47.0](https://github.com/openai/openai-python/compare/v3.46.0...v3.47.0) (2026-11-05)
 
 
